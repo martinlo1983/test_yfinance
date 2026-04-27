@@ -1,0 +1,35 @@
+name: Run yfinance test
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "0 20 * * 1-5"
+
+jobs:
+  run-yfinance-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run yfinance script
+        run: |
+          python scripts/yfinance_test.py
+
+      - name: Upload Excel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yfinance-output
+          path: output/yfinance_prueba_datos_acciones.xlsx
