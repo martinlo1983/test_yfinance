@@ -8,6 +8,10 @@ from datetime import datetime
 TICKERS = ["ADBE", "MSFT", "CRM", "NOW", "UBER", "ORCL"]
 
 
+# ============================================================
+# HELPERS
+# ============================================================
+
 def safe_value(df, row_name, col):
     if df is None or df.empty:
         return None
@@ -17,6 +21,17 @@ def safe_value(df, row_name, col):
         return df.loc[row_name, col]
     except Exception:
         return None
+
+
+def safe_get(obj, attr):
+    try:
+        value = getattr(obj, attr)
+        if value is None:
+            return pd.DataFrame()
+        return value
+    except Exception as e:
+        print(f"Error obteniendo {attr}: {e}")
+        return pd.DataFrame()
 
 
 def format_number(x):
@@ -37,65 +52,109 @@ def format_pct(x):
         return str(x)
 
 
-def print_price_block(ticker_obj):
-    hist = ticker_obj.history(period="1y", interval="1d")
+def format_raw(x):
+    if x is None or pd.isna(x):
+        return ""
+    return x
+
+
+def print_df(title, df):
+    print(f"\n[{title}]")
+
+    if df is None or df.empty:
+        print("Sin datos disponibles")
+        return
+
+    print(df.to_string())
+
+
+# ============================================================
+# PRECIO / TECNICO
+# ============================================================
+
+def print_price_block(tk):
+    hist = tk.history(period="1y", interval="1d")
 
     if hist.empty:
-        print("PRECIO: sin datos")
+        print("\n[PRECIO / TECNICO]")
+        print("Sin datos disponibles")
         return
 
     hist["EMA100"] = hist["Close"].ewm(span=100, adjust=False).mean()
     hist["EMA200"] = hist["Close"].ewm(span=200, adjust=False).mean()
 
     last = hist.iloc[-1]
+
     price = float(last["Close"])
     ema100 = float(last["EMA100"])
     ema200 = float(last["EMA200"])
     max_52w = float(hist["Close"].max())
 
+    vol_5d = float(hist["Volume"].tail(5).mean())
+    vol_20d = float(hist["Volume"].tail(20).mean())
+
     print("\n[PRECIO / TECNICO]")
-    print(f"Precio actual:      {price:.2f}")
-    print(f"EMA100:             {ema100:.2f}")
-    print(f"EMA200:             {ema200:.2f}")
-    print(f"% vs Max 52W:       {format_pct(price / max_52w - 1)}")
-    print(f"% vs EMA200:        {format_pct(price / ema200 - 1)}")
+    print(f"Precio actual:       {price:.2f}")
+    print(f"EMA100:              {ema100:.2f}")
+    print(f"EMA200:              {ema200:.2f}")
+    print(f"% vs Max 52W:        {format_pct(price / max_52w - 1)}")
+    print(f"% vs EMA100:         {format_pct(price / ema100 - 1)}")
+    print(f"% vs EMA200:         {format_pct(price / ema200 - 1)}")
+    print(f"Vol relativo 5/20d:  {vol_5d / vol_20d:.2f}" if vol_20d else "Vol relativo: sin dato")
 
 
-def print_info_block(ticker_obj):
+# ============================================================
+# INFO ACTUAL
+# ============================================================
+
+def print_info_block(tk):
     try:
-        info = ticker_obj.info
+        info = tk.info
     except Exception:
         info = {}
 
     print("\n[INFO ACTUAL]")
     fields = {
+        "Short Name": "shortName",
         "Sector": "sector",
         "Industria": "industry",
         "Trailing PE": "trailingPE",
         "Forward PE": "forwardPE",
         "PEG": "pegRatio",
+        "Trailing EPS": "trailingEps",
+        "Forward EPS": "forwardEps",
         "Revenue Growth": "revenueGrowth",
         "Earnings Growth": "earningsGrowth",
         "Operating Margin": "operatingMargins",
         "Net Margin": "profitMargins",
         "Free Cash Flow": "freeCashflow",
+        "Operating Cash Flow": "operatingCashflow",
+        "Total Debt": "totalDebt",
+        "Total Cash": "totalCash",
+        "Next Earnings Date": "earningsDate",
+        "Ex Dividend Date": "exDividendDate",
     }
 
     for label, key in fields.items():
         value = info.get(key)
+
         if key in ["revenueGrowth", "earningsGrowth", "operatingMargins", "profitMargins"]:
             value = format_pct(value)
-        elif key == "freeCashflow":
+        elif key in ["freeCashflow", "operatingCashflow", "totalDebt", "totalCash"]:
             value = format_number(value)
+
         print(f"{label}: {value}")
 
 
-def build_income_table(financials):
-    rows = []
+# ============================================================
+# INCOME STATEMENT
+# ============================================================
 
+def build_income_table(financials):
     if financials is None or financials.empty:
         return pd.DataFrame()
 
+    rows = []
     cols = list(financials.columns[:4])
 
     for col in cols:
@@ -125,12 +184,15 @@ def build_income_table(financials):
     return df
 
 
-def build_cashflow_table(cashflow):
-    rows = []
+# ============================================================
+# CASHFLOW / FCF
+# ============================================================
 
+def build_cashflow_table(cashflow):
     if cashflow is None or cashflow.empty:
         return pd.DataFrame()
 
+    rows = []
     cols = list(cashflow.columns[:4])
 
     for col in cols:
@@ -154,14 +216,72 @@ def build_cashflow_table(cashflow):
     return df
 
 
-def print_table(title, df):
+# ============================================================
+# TTM
+# ============================================================
+
+def build_ttm_table(q_income, q_cashflow):
+    if q_income is None or q_income.empty:
+        return pd.DataFrame()
+
+    last_4q = q_income.head(4).copy()
+
+    revenue_ttm = last_4q["Revenue"].sum(skipna=True)
+    op_income_ttm = last_4q["Operating Income"].sum(skipna=True)
+    net_income_ttm = last_4q["Net Income"].sum(skipna=True)
+
+    fcf_ttm = None
+    if q_cashflow is not None and not q_cashflow.empty:
+        fcf_ttm = q_cashflow.head(4)["Free Cash Flow Calc"].sum(skipna=True)
+
+    rows = [{
+        "Revenue TTM": revenue_ttm,
+        "Operating Income TTM": op_income_ttm,
+        "Net Income TTM": net_income_ttm,
+        "Op Margin TTM": op_income_ttm / revenue_ttm if revenue_ttm else None,
+        "Net Margin TTM": net_income_ttm / revenue_ttm if revenue_ttm else None,
+        "FCF TTM": fcf_ttm,
+        "FCF Margin TTM": fcf_ttm / revenue_ttm if revenue_ttm and fcf_ttm is not None else None,
+    }]
+
+    return pd.DataFrame(rows)
+
+
+# ============================================================
+# EXPECTATIVAS / ANALYSIS
+# ============================================================
+
+def print_analysis_block(tk):
+    print("\n" + "-" * 80)
+    print("[EXPECTATIVAS / ANALYSIS]")
+    print("-" * 80)
+
+    analysis_items = {
+        "EARNINGS ESTIMATE": "earnings_estimate",
+        "REVENUE ESTIMATE": "revenue_estimate",
+        "EARNINGS HISTORY": "earnings_history",
+        "EPS TREND": "eps_trend",
+        "EPS REVISIONS": "eps_revisions",
+        "GROWTH ESTIMATES": "growth_estimates",
+    }
+
+    for title, attr in analysis_items.items():
+        df = safe_get(tk, attr)
+        print_df(title, df)
+
+
+# ============================================================
+# PRINT TABLAS FORMATEADAS
+# ============================================================
+
+def print_financial_table(title, df):
     print(f"\n[{title}]")
 
-    if df.empty:
+    if df is None or df.empty:
         print("Sin datos disponibles")
         return
 
-    df_print = df.copy()
+    dfp = df.copy()
 
     money_cols = [
         "Revenue",
@@ -170,6 +290,10 @@ def print_table(title, df):
         "Operating Cash Flow",
         "CapEx",
         "Free Cash Flow Calc",
+        "Revenue TTM",
+        "Operating Income TTM",
+        "Net Income TTM",
+        "FCF TTM",
     ]
 
     pct_cols = [
@@ -178,18 +302,25 @@ def print_table(title, df):
         "Revenue Growth vs Prev",
         "Net Income Growth vs Prev",
         "FCF Growth vs Prev",
+        "Op Margin TTM",
+        "Net Margin TTM",
+        "FCF Margin TTM",
     ]
 
     for col in money_cols:
-        if col in df_print.columns:
-            df_print[col] = df_print[col].apply(format_number)
+        if col in dfp.columns:
+            dfp[col] = dfp[col].apply(format_number)
 
     for col in pct_cols:
-        if col in df_print.columns:
-            df_print[col] = df_print[col].apply(format_pct)
+        if col in dfp.columns:
+            dfp[col] = dfp[col].apply(format_pct)
 
-    print(df_print.to_string(index=False))
+    print(dfp.to_string(index=False))
 
+
+# ============================================================
+# PROCESO POR TICKER
+# ============================================================
 
 def process_ticker(ticker):
     print("\n" + "=" * 100)
@@ -201,17 +332,26 @@ def process_ticker(ticker):
     print_price_block(tk)
     print_info_block(tk)
 
-    annual_income = build_income_table(tk.financials)
-    quarterly_income = build_income_table(tk.quarterly_financials)
+    annual_income = build_income_table(safe_get(tk, "financials"))
+    quarterly_income = build_income_table(safe_get(tk, "quarterly_financials"))
 
-    annual_cashflow = build_cashflow_table(tk.cashflow)
-    quarterly_cashflow = build_cashflow_table(tk.quarterly_cashflow)
+    annual_cashflow = build_cashflow_table(safe_get(tk, "cashflow"))
+    quarterly_cashflow = build_cashflow_table(safe_get(tk, "quarterly_cashflow"))
 
-    print_table("INCOME ANUAL - ULTIMOS 4 PERIODOS", annual_income)
-    print_table("INCOME TRIMESTRAL - ULTIMOS 4 PERIODOS", quarterly_income)
-    print_table("CASHFLOW ANUAL - ULTIMOS 4 PERIODOS", annual_cashflow)
-    print_table("CASHFLOW TRIMESTRAL - ULTIMOS 4 PERIODOS", quarterly_cashflow)
+    ttm_table = build_ttm_table(quarterly_income, quarterly_cashflow)
 
+    print_financial_table("INCOME ANUAL - ULTIMOS 4 PERIODOS", annual_income)
+    print_financial_table("INCOME TRIMESTRAL - ULTIMOS 4 PERIODOS", quarterly_income)
+    print_financial_table("CASHFLOW ANUAL - ULTIMOS 4 PERIODOS", annual_cashflow)
+    print_financial_table("CASHFLOW TRIMESTRAL - ULTIMOS 4 PERIODOS", quarterly_cashflow)
+    print_financial_table("TTM - CALCULADO DESDE ULTIMOS 4 TRIMESTRES", ttm_table)
+
+    print_analysis_block(tk)
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
     for ticker in TICKERS:
