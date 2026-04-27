@@ -1,187 +1,224 @@
 # ============================================================
 # PRUEBA YFINANCE - SOLO CONSOLA (SIN EXCEL)
 # ============================================================
-
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
 
-
-TICKERS = [
-    "ADBE",
-    "MSFT",
-    "CRM",
-    "NOW",
-    "UBER",
-    "ORCL"
-]
+TICKERS = ["ADBE", "MSFT", "CRM", "NOW", "UBER", "ORCL"]
 
 
-def safe_get(dictionary, key):
+def safe_value(df, row_name, col):
+    if df is None or df.empty:
+        return None
+    if row_name not in df.index:
+        return None
     try:
-        return dictionary.get(key, None)
+        return df.loc[row_name, col]
     except Exception:
         return None
 
 
-# =========================
-# PRECIO
-# =========================
-def get_price_data(ticker):
-    tk = yf.Ticker(ticker)
-    hist = tk.history(period="1y", interval="1d")
+def format_number(x):
+    if x is None or pd.isna(x):
+        return ""
+    try:
+        return f"{float(x):,.0f}"
+    except Exception:
+        return str(x)
+
+
+def format_pct(x):
+    if x is None or pd.isna(x):
+        return ""
+    try:
+        return f"{float(x) * 100:.2f}%"
+    except Exception:
+        return str(x)
+
+
+def print_price_block(ticker_obj):
+    hist = ticker_obj.history(period="1y", interval="1d")
 
     if hist.empty:
-        return {}
+        print("PRECIO: sin datos")
+        return
 
     hist["EMA100"] = hist["Close"].ewm(span=100, adjust=False).mean()
     hist["EMA200"] = hist["Close"].ewm(span=200, adjust=False).mean()
 
     last = hist.iloc[-1]
-
-    precio_actual = float(last["Close"])
+    price = float(last["Close"])
     ema100 = float(last["EMA100"])
     ema200 = float(last["EMA200"])
     max_52w = float(hist["Close"].max())
 
-    vol_5d = float(hist["Volume"].tail(5).mean())
-    vol_20d = float(hist["Volume"].tail(20).mean())
+    print("\n[PRECIO / TECNICO]")
+    print(f"Precio actual:      {price:.2f}")
+    print(f"EMA100:             {ema100:.2f}")
+    print(f"EMA200:             {ema200:.2f}")
+    print(f"% vs Max 52W:       {format_pct(price / max_52w - 1)}")
+    print(f"% vs EMA200:        {format_pct(price / ema200 - 1)}")
 
-    return {
-        "PRECIO_ACTUAL": precio_actual,
-        "EMA100": ema100,
-        "EMA200": ema200,
-        "PCT_VS_MAX_52W": precio_actual / max_52w - 1 if max_52w else None,
-        "PCT_VS_EMA200": precio_actual / ema200 - 1 if ema200 else None,
-        "VOL_RELATIVO": vol_5d / vol_20d if vol_20d else None,
+
+def print_info_block(ticker_obj):
+    try:
+        info = ticker_obj.info
+    except Exception:
+        info = {}
+
+    print("\n[INFO ACTUAL]")
+    fields = {
+        "Sector": "sector",
+        "Industria": "industry",
+        "Trailing PE": "trailingPE",
+        "Forward PE": "forwardPE",
+        "PEG": "pegRatio",
+        "Revenue Growth": "revenueGrowth",
+        "Earnings Growth": "earningsGrowth",
+        "Operating Margin": "operatingMargins",
+        "Net Margin": "profitMargins",
+        "Free Cash Flow": "freeCashflow",
     }
 
-
-# =========================
-# INFO GENERAL
-# =========================
-def get_info_data(ticker):
-    tk = yf.Ticker(ticker)
-    info = tk.info
-
-    return {
-        "SECTOR": safe_get(info, "sector"),
-        "TRAILING_PE": safe_get(info, "trailingPE"),
-        "FORWARD_PE": safe_get(info, "forwardPE"),
-        "PEG": safe_get(info, "pegRatio"),
-        "REV_GROWTH": safe_get(info, "revenueGrowth"),
-        "EPS_GROWTH": safe_get(info, "earningsGrowth"),
-        "OP_MARGIN": safe_get(info, "operatingMargins"),
-        "NET_MARGIN": safe_get(info, "profitMargins"),
-        "FCF_INFO": safe_get(info, "freeCashflow"),
-    }
+    for label, key in fields.items():
+        value = info.get(key)
+        if key in ["revenueGrowth", "earningsGrowth", "operatingMargins", "profitMargins"]:
+            value = format_pct(value)
+        elif key == "freeCashflow":
+            value = format_number(value)
+        print(f"{label}: {value}")
 
 
-# =========================
-# FINANCIALES
-# =========================
-def get_financials(ticker):
-    tk = yf.Ticker(ticker)
-    data = {}
+def build_income_table(financials):
+    rows = []
 
-    try:
-        qf = tk.quarterly_financials
+    if financials is None or financials.empty:
+        return pd.DataFrame()
 
-        if not qf.empty:
-            latest = qf.columns[0]
-            prev = qf.columns[1] if len(qf.columns) > 1 else None
+    cols = list(financials.columns[:4])
 
-            rev = qf.loc["Total Revenue", latest] if "Total Revenue" in qf.index else None
-            op = qf.loc["Operating Income", latest] if "Operating Income" in qf.index else None
-            net = qf.loc["Net Income", latest] if "Net Income" in qf.index else None
+    for col in cols:
+        revenue = safe_value(financials, "Total Revenue", col)
+        op_income = safe_value(financials, "Operating Income", col)
+        net_income = safe_value(financials, "Net Income", col)
+        diluted_eps = safe_value(financials, "Diluted EPS", col)
+        basic_eps = safe_value(financials, "Basic EPS", col)
 
-            data["Q_REV"] = rev
-            data["Q_OP"] = op
-            data["Q_NET"] = net
+        rows.append({
+            "Periodo": str(col.date()) if hasattr(col, "date") else str(col),
+            "Revenue": revenue,
+            "Operating Income": op_income,
+            "Net Income": net_income,
+            "Op Margin": op_income / revenue if revenue not in [None, 0] and op_income is not None else None,
+            "Net Margin": net_income / revenue if revenue not in [None, 0] and net_income is not None else None,
+            "Diluted EPS": diluted_eps,
+            "Basic EPS": basic_eps,
+        })
 
-            if prev is not None:
-                prev_rev = qf.loc["Total Revenue", prev] if "Total Revenue" in qf.index else None
-                data["REV_QOQ"] = rev / prev_rev - 1 if rev and prev_rev else None
+    df = pd.DataFrame(rows)
 
-            data["OP_MARGIN_CALC"] = op / rev if rev and op else None
-            data["NET_MARGIN_CALC"] = net / rev if rev and net else None
+    if not df.empty:
+        df["Revenue Growth vs Prev"] = df["Revenue"].pct_change(periods=-1)
+        df["Net Income Growth vs Prev"] = df["Net Income"].pct_change(periods=-1)
 
-    except Exception as e:
-        data["FIN_ERROR"] = str(e)
-
-    return data
-
-
-# =========================
-# CASHFLOW (FCF)
-# =========================
-def get_cashflow(ticker):
-    tk = yf.Ticker(ticker)
-    data = {}
-
-    try:
-        qcf = tk.quarterly_cashflow
-
-        if not qcf.empty:
-            latest = qcf.columns[0]
-            prev = qcf.columns[1] if len(qcf.columns) > 1 else None
-
-            op_cf = qcf.loc["Operating Cash Flow", latest] if "Operating Cash Flow" in qcf.index else None
-            capex = qcf.loc["Capital Expenditure", latest] if "Capital Expenditure" in qcf.index else None
-
-            fcf = op_cf + capex if op_cf and capex else None
-
-            data["Q_FCF"] = fcf
-
-            if prev is not None:
-                prev_op_cf = qcf.loc["Operating Cash Flow", prev] if "Operating Cash Flow" in qcf.index else None
-                prev_capex = qcf.loc["Capital Expenditure", prev] if "Capital Expenditure" in qcf.index else None
-                prev_fcf = prev_op_cf + prev_capex if prev_op_cf and prev_capex else None
-
-                data["FCF_QOQ"] = fcf / prev_fcf - 1 if fcf and prev_fcf else None
-
-    except Exception as e:
-        data["CF_ERROR"] = str(e)
-
-    return data
+    return df
 
 
-# =========================
-# PROCESAMIENTO
-# =========================
+def build_cashflow_table(cashflow):
+    rows = []
+
+    if cashflow is None or cashflow.empty:
+        return pd.DataFrame()
+
+    cols = list(cashflow.columns[:4])
+
+    for col in cols:
+        operating_cf = safe_value(cashflow, "Operating Cash Flow", col)
+        capex = safe_value(cashflow, "Capital Expenditure", col)
+
+        fcf = operating_cf + capex if operating_cf is not None and capex is not None else None
+
+        rows.append({
+            "Periodo": str(col.date()) if hasattr(col, "date") else str(col),
+            "Operating Cash Flow": operating_cf,
+            "CapEx": capex,
+            "Free Cash Flow Calc": fcf,
+        })
+
+    df = pd.DataFrame(rows)
+
+    if not df.empty:
+        df["FCF Growth vs Prev"] = df["Free Cash Flow Calc"].pct_change(periods=-1)
+
+    return df
+
+
+def print_table(title, df):
+    print(f"\n[{title}]")
+
+    if df.empty:
+        print("Sin datos disponibles")
+        return
+
+    df_print = df.copy()
+
+    money_cols = [
+        "Revenue",
+        "Operating Income",
+        "Net Income",
+        "Operating Cash Flow",
+        "CapEx",
+        "Free Cash Flow Calc",
+    ]
+
+    pct_cols = [
+        "Op Margin",
+        "Net Margin",
+        "Revenue Growth vs Prev",
+        "Net Income Growth vs Prev",
+        "FCF Growth vs Prev",
+    ]
+
+    for col in money_cols:
+        if col in df_print.columns:
+            df_print[col] = df_print[col].apply(format_number)
+
+    for col in pct_cols:
+        if col in df_print.columns:
+            df_print[col] = df_print[col].apply(format_pct)
+
+    print(df_print.to_string(index=False))
+
+
 def process_ticker(ticker):
-    print(f"\n--- {ticker} ---")
+    print("\n" + "=" * 100)
+    print(f"TICKER: {ticker} | RUN: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 100)
 
-    row = {
-        "TICKER": ticker,
-        "DATE": datetime.now().strftime("%Y-%m-%d"),
-    }
+    tk = yf.Ticker(ticker)
 
-    try:
-        row.update(get_price_data(ticker))
-        row.update(get_info_data(ticker))
-        row.update(get_financials(ticker))
-        row.update(get_cashflow(ticker))
+    print_price_block(tk)
+    print_info_block(tk)
 
-    except Exception as e:
-        row["ERROR"] = str(e)
+    annual_income = build_income_table(tk.financials)
+    quarterly_income = build_income_table(tk.quarterly_financials)
 
-    return row
+    annual_cashflow = build_cashflow_table(tk.cashflow)
+    quarterly_cashflow = build_cashflow_table(tk.quarterly_cashflow)
+
+    print_table("INCOME ANUAL - ULTIMOS 4 PERIODOS", annual_income)
+    print_table("INCOME TRIMESTRAL - ULTIMOS 4 PERIODOS", quarterly_income)
+    print_table("CASHFLOW ANUAL - ULTIMOS 4 PERIODOS", annual_cashflow)
+    print_table("CASHFLOW TRIMESTRAL - ULTIMOS 4 PERIODOS", quarterly_cashflow)
 
 
-# =========================
-# MAIN
-# =========================
 def main():
-    results = []
-
     for ticker in TICKERS:
-        results.append(process_ticker(ticker))
-
-    df = pd.DataFrame(results)
-
-    print("\n================ RESULTADO ================\n")
-    print(df.to_string(index=False))
+        try:
+            process_ticker(ticker)
+        except Exception as e:
+            print(f"\nERROR procesando {ticker}: {e}")
 
 
 if __name__ == "__main__":
