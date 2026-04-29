@@ -5,7 +5,7 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 
-TICKERS = ["ADBE", "MSFT", "CRM", "NOW", "UBER", "ORCL"]
+TICKERS = ["OXY","MU","ADBE", "MSFT", "CRM", "NOW", "UBER", "ORCL"]
 
 
 # ============================================================
